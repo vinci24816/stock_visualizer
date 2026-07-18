@@ -1,0 +1,7 @@
+requests
+SQLAlchemy
+pydantic-settings
+python-dotenv
+pandas
+pytest
+responses
