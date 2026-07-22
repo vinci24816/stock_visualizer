@@ -1,11 +1,12 @@
 """Database repositories for imported market data."""
 
 from collections.abc import Iterable
+from datetime import date
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 
 from src.db.database import Database
-from src.db.schema import Company
+from src.db.schema import Company, DailyPrice
 
 
 class CompanyRepository:
@@ -14,7 +15,6 @@ class CompanyRepository:
     def __init__(self, database: Database) -> None:
         self._database = database
 
-    
     def upsert_companies(self, companies: Iterable[Company]) -> None:
         """企業を新規登録し、同じ証券コードが存在する場合は更新する。"""
 
@@ -70,3 +70,54 @@ class CompanyRepository:
         )
         with self._database.get_session() as session:
             return list(session.scalars(statement))
+
+
+class PriceRepository:
+    """日次株価データの保存と検索を担当するリポジトリ。"""
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    def upsert_daily_prices(self, prices: Iterable[DailyPrice]) -> None:
+        """日次株価を新規登録し、同一銘柄・日付が存在する場合は更新する。"""
+
+        with self._database.get_session() as session:
+            for price in prices:
+                session.merge(price)
+
+    def find_by_code(
+        self,
+        code: str,
+        from_date: date | None = None,
+        to_date: date | None = None,
+    ) -> list[DailyPrice]:
+        """指定銘柄の日次株価を期間で絞り込み、日付順で取得する。"""
+
+        normalized_code = code.strip()
+        if not normalized_code:
+            return []
+        if from_date is not None and to_date is not None and from_date > to_date:
+            raise ValueError("from_date must be on or before to_date")
+
+        statement = select(DailyPrice).where(DailyPrice.code == normalized_code)
+        if from_date is not None:
+            statement = statement.where(DailyPrice.date >= from_date)
+        if to_date is not None:
+            statement = statement.where(DailyPrice.date <= to_date)
+        statement = statement.order_by(DailyPrice.date)
+
+        with self._database.get_session() as session:
+            return list(session.scalars(statement))
+
+    def find_latest_date(self, code: str) -> date | None:
+        """指定銘柄についてDBに保存されている最新の株価日付を取得する。"""
+
+        normalized_code = code.strip()
+        if not normalized_code:
+            return None
+
+        statement = select(func.max(DailyPrice.date)).where(
+            DailyPrice.code == normalized_code
+        )
+        with self._database.get_session() as session:
+            return session.scalar(statement)
