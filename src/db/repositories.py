@@ -6,7 +6,7 @@ from datetime import date
 from sqlalchemy import func, or_, select
 
 from src.db.database import Database
-from src.db.schema import Company, DailyPrice
+from src.db.schema import Company, DailyPrice, FinancialStatement
 
 
 class CompanyRepository:
@@ -121,3 +121,63 @@ class PriceRepository:
         )
         with self._database.get_session() as session:
             return session.scalar(statement)
+
+
+class FinancialStatementRepository:
+    """財務諸表データの保存と検索を担当するリポジトリ。"""
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    def upsert_statements(
+        self,
+        statements: Iterable[FinancialStatement],
+    ) -> None:
+        """財務情報を登録し、同じ複合主キーが存在する場合は更新する。"""
+
+        with self._database.get_session() as session:
+            for financial_statement in statements:
+                session.merge(financial_statement)
+
+    def find_by_code(
+        self,
+        code: str,
+        from_date: date | None = None,
+        to_date: date | None = None,
+    ) -> list[FinancialStatement]:
+        """指定銘柄の財務情報を開示日の期間で絞り込んで取得する。"""
+
+        normalized_code = code.strip()
+        if not normalized_code:
+            return []
+        if from_date is not None and to_date is not None and from_date > to_date:
+            raise ValueError("from_date must be on or before to_date")
+
+        query = select(FinancialStatement).where(
+            FinancialStatement.code == normalized_code
+        )
+        if from_date is not None:
+            query = query.where(FinancialStatement.disclosed_date >= from_date)
+        if to_date is not None:
+            query = query.where(FinancialStatement.disclosed_date <= to_date)
+        query = query.order_by(
+            FinancialStatement.fiscal_year_end,
+            FinancialStatement.disclosed_date,
+            FinancialStatement.fiscal_period,
+        )
+
+        with self._database.get_session() as session:
+            return list(session.scalars(query))
+
+    def find_latest_disclosed_date(self, code: str) -> date | None:
+        """指定銘柄について保存済みの最新開示日を取得する。"""
+
+        normalized_code = code.strip()
+        if not normalized_code:
+            return None
+
+        query = select(func.max(FinancialStatement.disclosed_date)).where(
+            FinancialStatement.code == normalized_code
+        )
+        with self._database.get_session() as session:
+            return session.scalar(query)
