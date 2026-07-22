@@ -6,7 +6,7 @@ from datetime import date
 from sqlalchemy import func, or_, select
 
 from src.db.database import Database
-from src.db.schema import Company, DailyPrice, FinancialStatement
+from src.db.schema import Company, DailyPrice, FinancialMetric, FinancialStatement
 
 
 class CompanyRepository:
@@ -139,6 +139,18 @@ class FinancialStatementRepository:
             for financial_statement in statements:
                 session.merge(financial_statement)
 
+    def find_all(self) -> list[FinancialStatement]:
+        """保存されている全財務情報を銘柄・会計年度・開示日順で取得する。"""
+
+        query = select(FinancialStatement).order_by(
+            FinancialStatement.code,
+            FinancialStatement.fiscal_year_end,
+            FinancialStatement.disclosed_date,
+            FinancialStatement.fiscal_period,
+        )
+        with self._database.get_session() as session:
+            return list(session.scalars(query))
+
     def find_by_code(
         self,
         code: str,
@@ -181,3 +193,101 @@ class FinancialStatementRepository:
         )
         with self._database.get_session() as session:
             return session.scalar(query)
+
+
+class FinancialMetricRepository:
+    """計算済み財務指標の保存と検索を担当するリポジトリ。"""
+
+    METRIC_NAMES = frozenset(
+        {
+            "equity_ratio",
+            "roe",
+            "roa",
+            "roi",
+            "operating_margin",
+            "per",
+            "pbr",
+            "dividend_yield",
+        }
+    )
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    def upsert_metrics(self, metrics: Iterable[FinancialMetric]) -> None:
+        """財務指標を登録し、同じ複合主キーが存在する場合は更新する。"""
+
+        with self._database.get_session() as session:
+            for metric in metrics:
+                session.merge(metric)
+
+    def find_by_code(
+        self,
+        code: str,
+        from_date: date | None = None,
+        to_date: date | None = None,
+    ) -> list[FinancialMetric]:
+        """指定銘柄の計算済み指標を開示日の期間で絞り込んで取得する。"""
+
+        normalized_code = code.strip()
+        if not normalized_code:
+            return []
+        self._validate_date_range(from_date, to_date)
+
+        query = select(FinancialMetric).where(
+            FinancialMetric.code == normalized_code
+        )
+        query = self._apply_date_range(query, from_date, to_date)
+        query = query.order_by(
+            FinancialMetric.fiscal_year_end,
+            FinancialMetric.disclosed_date,
+            FinancialMetric.fiscal_period,
+        )
+
+        with self._database.get_session() as session:
+            return list(session.scalars(query))
+
+    def find_by_metric(
+        self,
+        metric_name: str,
+        from_date: date | None = None,
+        to_date: date | None = None,
+    ) -> list[FinancialMetric]:
+        """指定指標に値がある全銘柄のデータを期間で絞り込んで取得する。"""
+
+        normalized_name = metric_name.strip().lower()
+        if normalized_name not in self.METRIC_NAMES:
+            allowed_names = ", ".join(sorted(self.METRIC_NAMES))
+            raise ValueError(
+                f"metric_name must be one of: {allowed_names}"
+            )
+        self._validate_date_range(from_date, to_date)
+
+        metric_column = getattr(FinancialMetric, normalized_name)
+        query = select(FinancialMetric).where(metric_column.is_not(None))
+        query = self._apply_date_range(query, from_date, to_date)
+        query = query.order_by(
+            FinancialMetric.fiscal_year_end,
+            FinancialMetric.disclosed_date,
+            FinancialMetric.code,
+            FinancialMetric.fiscal_period,
+        )
+
+        with self._database.get_session() as session:
+            return list(session.scalars(query))
+
+    @staticmethod
+    def _validate_date_range(
+        from_date: date | None,
+        to_date: date | None,
+    ) -> None:
+        if from_date is not None and to_date is not None and from_date > to_date:
+            raise ValueError("from_date must be on or before to_date")
+
+    @staticmethod
+    def _apply_date_range(query, from_date: date | None, to_date: date | None):
+        if from_date is not None:
+            query = query.where(FinancialMetric.disclosed_date >= from_date)
+        if to_date is not None:
+            query = query.where(FinancialMetric.disclosed_date <= to_date)
+        return query
