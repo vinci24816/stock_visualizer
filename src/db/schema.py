@@ -64,3 +64,42 @@ class DailyPrice(Base):
             f"DailyPrice(code={self.code!r}, date={self.date!r}, "
             f"close={self.close!r})"
         )
+
+
+class FinancialStatement(Base):
+    """企業が開示した決算期ごとの財務情報サマリー。"""
+
+    __tablename__ = "financial_statements"
+
+    code: Mapped[str] = mapped_column(
+        String(5),
+        ForeignKey("companies.code"),
+        primary_key=True,
+    )
+    fiscal_period: Mapped[str] = mapped_column(String(50), primary_key=True)
+    disclosed_date: Mapped[date] = mapped_column(
+        Date,
+        primary_key=True,
+        index=True,
+    )
+    document_type: Mapped[str | None] = mapped_column(String(100))
+    fiscal_year_start: Mapped[date | None] = mapped_column(Date)
+    fiscal_year_end: Mapped[date | None] = mapped_column(Date, index=True)
+
+    net_sales: Mapped[Decimal | None] = mapped_column(Numeric(24, 2))
+    operating_profit: Mapped[Decimal | None] = mapped_column(Numeric(24, 2))
+    ordinary_profit: Mapped[Decimal | None] = mapped_column(Numeric(24, 2))
+    profit: Mapped[Decimal | None] = mapped_column(Numeric(24, 2))
+    total_assets: Mapped[Decimal | None] = mapped_column(Numeric(24, 2))
+    equity: Mapped[Decimal | None] = mapped_column(Numeric(24, 2))
+    liabilities: Mapped[Decimal | None] = mapped_column(Numeric(24, 2))
+    eps: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    bps: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    dividend: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+
+    def __repr__(self) -> str:
+        return (
+            f"FinancialStatement(code={self.code!r}, "
+            f"fiscal_period={self.fiscal_period!r}, "
+            f"disclosed_date={self.disclosed_date!r})"
+        )
