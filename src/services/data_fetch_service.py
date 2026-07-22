@@ -8,8 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from src.api.jquants_client import DateLike, JQuantsClient
-from src.db.repositories import CompanyRepository, PriceRepository
-from src.db.schema import Company, DailyPrice
+from src.db.repositories import (
+    CompanyRepository,
+    FinancialStatementRepository,
+    PriceRepository,
+)
+from src.db.schema import Company, DailyPrice, FinancialStatement
 from src.storage.raw_data_storage import RawDataStorage
 
 
@@ -35,11 +39,13 @@ class DataFetchService:
         raw_storage: RawDataStorage,
         company_repository: CompanyRepository,
         price_repository: PriceRepository,
+        financial_statement_repository: FinancialStatementRepository,
     ) -> None:
         self._client = client
         self._raw_storage = raw_storage
         self._company_repository = company_repository
         self._price_repository = price_repository
+        self._financial_statement_repository = financial_statement_repository
 
     def sync_companies(
         self,
@@ -107,6 +113,36 @@ class DataFetchService:
         self._price_repository.upsert_daily_prices(prices)
         return SyncResult("daily_quotes", len(prices), raw_path)
 
+    def sync_financial_statements(
+        self,
+        code: str,
+        disclosure_date: DateLike | None = None,
+    ) -> SyncResult:
+        """1銘柄の財務情報を取得し、raw JSONとDBへ保存する。"""
+
+        normalized_code = code.strip()
+        if not normalized_code:
+            raise ValueError("code must not be empty")
+        if self._company_repository.find_by_code(normalized_code) is None:
+            raise ValueError(
+                f"company {normalized_code!r} is not registered; sync companies first"
+            )
+
+        records = self._client.get_statements(normalized_code, disclosure_date)
+        raw_path = self._raw_storage.save_json(
+            source="api",
+            category="financial_statements",
+            data=records,
+            file_name=self._timestamped_file_name(
+                f"financial_statements_{normalized_code}"
+            ),
+        )
+        statements = [
+            self._normalize_financial_statement(record) for record in records
+        ]
+        self._financial_statement_repository.upsert_statements(statements)
+        return SyncResult("financial_statements", len(statements), raw_path)
+
     @staticmethod
     def _normalize_company(
         record: Mapping[str, Any],
@@ -164,6 +200,51 @@ class DataFetchService:
         )
 
     @staticmethod
+    def _normalize_financial_statement(
+        record: Mapping[str, Any],
+    ) -> FinancialStatement:
+        """J-Quantsの財務サマリーをFinancialStatementへ変換する。"""
+
+        total_assets = DataFetchService._optional_decimal(record.get("TA"), "TA")
+        equity = DataFetchService._optional_decimal(record.get("Eq"), "Eq")
+        liabilities = DataFetchService._optional_decimal(
+            record.get("Liab"), "Liab"
+        )
+        if liabilities is None and total_assets is not None and equity is not None:
+            liabilities = total_assets - equity
+
+        return FinancialStatement(
+            code=DataFetchService._required_text(record, "Code"),
+            fiscal_period=DataFetchService._required_text(record, "CurPerType"),
+            disclosed_date=DataFetchService._required_date(record, "DiscDate"),
+            document_type=DataFetchService._optional_text(record.get("DocType")),
+            fiscal_year_start=DataFetchService._optional_date(
+                record.get("CurFYSt"), "CurFYSt"
+            ),
+            fiscal_year_end=DataFetchService._optional_date(
+                record.get("CurFYEn"), "CurFYEn"
+            ),
+            net_sales=DataFetchService._optional_decimal(
+                record.get("Sales"), "Sales"
+            ),
+            operating_profit=DataFetchService._optional_decimal(
+                record.get("OP"), "OP"
+            ),
+            ordinary_profit=DataFetchService._optional_decimal(
+                record.get("OdP"), "OdP"
+            ),
+            profit=DataFetchService._optional_decimal(record.get("NP"), "NP"),
+            total_assets=total_assets,
+            equity=equity,
+            liabilities=liabilities,
+            eps=DataFetchService._optional_decimal(record.get("EPS"), "EPS"),
+            bps=DataFetchService._optional_decimal(record.get("BPS"), "BPS"),
+            dividend=DataFetchService._optional_decimal(
+                record.get("DivAnn"), "DivAnn"
+            ),
+        )
+
+    @staticmethod
     def _required_text(record: Mapping[str, Any], field: str) -> str:
         value = DataFetchService._optional_text(record.get(field))
         if value is None:
@@ -186,6 +267,13 @@ class DataFetchService:
             except ValueError:
                 continue
         raise DataNormalizationError(f"API field {field!r} is not a valid date")
+
+    @staticmethod
+    def _optional_date(value: Any, field: str) -> date | None:
+        normalized = DataFetchService._optional_text(value)
+        if normalized is None:
+            return None
+        return DataFetchService._required_date({field: normalized}, field)
 
     @staticmethod
     def _optional_decimal(value: Any, field: str) -> Decimal | None:
