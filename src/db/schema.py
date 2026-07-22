@@ -3,7 +3,16 @@
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, Date, ForeignKey, Numeric, String, text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Date,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Numeric,
+    String,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -100,6 +109,48 @@ class FinancialStatement(Base):
     def __repr__(self) -> str:
         return (
             f"FinancialStatement(code={self.code!r}, "
+            f"fiscal_period={self.fiscal_period!r}, "
+            f"disclosed_date={self.disclosed_date!r})"
+        )
+
+
+class FinancialMetric(Base):
+    """財務諸表と株価から計算した決算期ごとの財務指標。"""
+
+    __tablename__ = "financial_metrics"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["code", "fiscal_period", "disclosed_date"],
+            [
+                "financial_statements.code",
+                "financial_statements.fiscal_period",
+                "financial_statements.disclosed_date",
+            ],
+        ),
+    )
+
+    code: Mapped[str] = mapped_column(String(5), primary_key=True)
+    fiscal_period: Mapped[str] = mapped_column(String(50), primary_key=True)
+    disclosed_date: Mapped[date] = mapped_column(
+        Date,
+        primary_key=True,
+        index=True,
+    )
+    fiscal_year_end: Mapped[date | None] = mapped_column(Date, index=True)
+    price_date: Mapped[date | None] = mapped_column(Date)
+
+    equity_ratio: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
+    roe: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
+    roa: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
+    roi: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
+    operating_margin: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
+    per: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    pbr: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    dividend_yield: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
+
+    def __repr__(self) -> str:
+        return (
+            f"FinancialMetric(code={self.code!r}, "
             f"fiscal_period={self.fiscal_period!r}, "
             f"disclosed_date={self.disclosed_date!r})"
         )
